@@ -4,8 +4,8 @@ extern crate image;
 extern crate nalgebra;
 extern crate threadpool;
 
-use std::sync::mpsc::channel;
 use std::f64;
+use std::sync::mpsc::channel;
 
 use image::{ImageBuffer, Rgba, RgbaImage};
 use nalgebra::Vector3;
@@ -106,14 +106,24 @@ fn color_sky(ray: &Ray) -> Vec3f {
 }
 
 
+fn random_point_in_unit() -> Vec3f {
+    return Vec3f::new_random().normalize();
+}
+
+
 fn color(ray: &Ray, world: &dyn Hittable) -> Vec3f {
-    let result = world.hit(ray, 0., T_MAX);
+    let result = world.hit(ray, 0.001, T_MAX);
     match result {
         None => {
             return color_sky(ray);
         }
         Some(hit) => {
-            return 0.5 * Vec3f::new(hit.normal.x + 1., hit.normal.y + 1., hit.normal.z + 1.);
+            let target = hit.p + hit.normal + random_point_in_unit();
+            let r = Ray {
+                a: hit.p,
+                b: target - hit.p
+            };
+            return 0.5 * color(&r, world);
         }
     }
 }
@@ -163,7 +173,6 @@ impl<T: Hittable> Hittable for World<T> {
     }
 }
 
-
 fn main() {
     let mut img: RgbaImage = ImageBuffer::new(WIDTH, HEIGHT);
 
@@ -173,12 +182,17 @@ fn main() {
         vertical: Vec3f::new(0.0, 2.0, 0.0),
         origin: Vec3f::new(0.0, 0.0, 0.0),
     };
-    let sphere: Sphere = Sphere {
+    let sphere = Sphere {
         center: Vec3f::new(0., 0., -1.),
         radius: 0.5,
     };
+    let ground = Sphere {
+        center: Vec3f::new(0., -100.5, -1.),
+        radius: 100.,
+    };
+
     let world = World {
-        objects: vec![sphere],
+        objects: vec![sphere, ground],
     };
 
     let (tx, rx) = channel();
@@ -199,9 +213,9 @@ fn main() {
 
     for (x, y, c) in rx.iter() {
         *img.get_pixel_mut(x, y) = Rgba([
-            (255. * c.x) as u8,
-            (255. * c.y) as u8,
-            (255. * c.z) as u8,
+            (255. * c.x.sqrt()) as u8,
+            (255. * c.y.sqrt()) as u8,
+            (255. * c.z.sqrt()) as u8,
             255,
         ]);
     }
