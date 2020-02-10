@@ -6,6 +6,7 @@ extern crate threadpool;
 
 use std::f64;
 use std::sync::mpsc::channel;
+use std::sync::Arc;
 
 use image::{ImageBuffer, Rgba, RgbaImage};
 use nalgebra::Vector3;
@@ -14,8 +15,8 @@ use threadpool::ThreadPool;
 const WIDTH: u32 = 1024;
 const HEIGHT: u32 = 512;
 
-const NUM_SAMPLES: u32 = 5;
-const T_MAX :f64 = f64::MAX;
+const NUM_SAMPLES: u32 = 100;
+const T_MAX: f64 = f64::MAX;
 
 type Vec3f = Vector3<f64>;
 
@@ -37,7 +38,7 @@ impl Camera {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Debug)]
 struct Ray {
     a: Vec3f,
     b: Vec3f,
@@ -61,10 +62,56 @@ trait Hittable: Sync {
     fn hit(&self, ray: &Ray, t_min: f64, t_max: f64) -> Option<Hit>;
 }
 
+trait Material: Sync + Send {
+    fn scatter(&self, ray: &Ray, hit: &Hit) -> Option<(Vec3f, Ray)>;
+}
+
 #[derive(Copy, Clone)]
+struct Diffuse {
+    albedo: Vec3f,
+}
+
+impl Material for Diffuse {
+    fn scatter(&self, ray: &Ray, hit: &Hit) -> Option<(Vec3f, Ray)> {
+        let target = hit.p + hit.normal + random_point_in_unit();
+        let scattered = Ray {
+            a: hit.p,
+            b: target - hit.p,
+        };
+        return Some((self.albedo.clone(), scattered));
+    }
+}
+
+fn reflect(a: &Vec3f, b: &Vec3f) -> Vec3f {
+    return a - 2.0 * a.dot(b) * b;
+}
+
+struct Metal {
+    albedo: Vec3f,
+    fuzz: f64,
+}
+
+impl Material for Metal {
+    fn scatter(&self, ray: &Ray, hit: &Hit) -> Option<(Vec3f, Ray)> {
+        let reflected = reflect(&ray.direction().normalize(), &hit.normal);
+        let scattered = Ray {
+            a: hit.p,
+            b: reflected + (self.fuzz * random_point_in_unit()),
+        };
+
+        if scattered.direction().dot(&hit.normal) > 0. {
+            return Some((self.albedo.clone(), scattered));
+        }
+
+        return None;
+    }
+}
+
+#[derive(Clone)]
 struct Sphere {
     center: Vec3f,
     radius: f64,
+    material: Arc<dyn Material>,
 }
 
 impl Hittable for Sphere {
@@ -85,6 +132,7 @@ impl Hittable for Sphere {
                     t: t,
                     p: p,
                     normal: ((p - self.center) / self.radius).normalize(),
+                    material: self.material.clone(),
                 });
             }
             return None;
@@ -105,58 +153,55 @@ fn color_sky(ray: &Ray) -> Vec3f {
     return c;
 }
 
-
 fn random_point_in_unit() -> Vec3f {
     return Vec3f::new_random().normalize();
 }
 
-
-fn color(ray: &Ray, world: &dyn Hittable) -> Vec3f {
+fn color(ray: &Ray, world: &impl Hittable, depth: u32) -> Vec3f {
     let result = world.hit(ray, 0.001, T_MAX);
     match result {
         None => {
             return color_sky(ray);
         }
         Some(hit) => {
-            let target = hit.p + hit.normal + random_point_in_unit();
-            let r = Ray {
-                a: hit.p,
-                b: target - hit.p
-            };
-            return 0.5 * color(&r, world);
+            if depth < 50 {
+                let result = hit.material.scatter(ray, &hit);
+                if result.is_some() {
+                    let (attenuation, scattered) = result.unwrap();
+                    return color(&scattered, world, depth + 1).component_mul(&attenuation);
+                }
+            }
+            return Vec3f::new(0., 0., 0.);
         }
     }
 }
 
-fn sample(camera: &Camera, x: u32, y: u32, world: &dyn Hittable) -> Vec3f {
+fn sample(camera: &Camera, x: u32, y: u32, world: &impl Hittable) -> Vec3f {
     let mut c = Vec3f::new(0., 0., 0.);
     for _ in 0..NUM_SAMPLES {
         let u = ((x as f64) + rand::random::<f64>()) / WIDTH as f64;
         let v = ((y as f64) + rand::random::<f64>()) / HEIGHT as f64;
         let ray = camera.get_ray(u, v);
-        c += color(&ray, world);
+        c += color(&ray, world, 0);
     }
     c /= NUM_SAMPLES as f64;
     return c;
 }
 
-
 struct Hit {
     t: f64,
     p: Vec3f,
     normal: Vec3f,
+    material: Arc<dyn Material>,
 }
-
 
 #[derive(Clone)]
 struct World<T: Hittable> {
     objects: Vec<T>,
 }
 
-
 impl<T: Hittable> Hittable for World<T> {
     fn hit(&self, ray: &Ray, t_min: f64, t_max: f64) -> Option<Hit> {
-
         let mut rv: Option<Hit> = None;
         let mut closest = t_max;
         for hittable in self.objects.iter() {
@@ -165,8 +210,8 @@ impl<T: Hittable> Hittable for World<T> {
                 Some(hit) => {
                     closest = hit.t;
                     rv = Some(hit);
-                },
-                None => {},
+                }
+                None => {}
             }
         }
         return rv;
@@ -182,15 +227,22 @@ fn main() {
         vertical: Vec3f::new(0.0, 2.0, 0.0),
         origin: Vec3f::new(0.0, 0.0, 0.0),
     };
+
     let sphere = Sphere {
         center: Vec3f::new(0., 0., -1.),
         radius: 0.5,
+        material: Arc::new(Diffuse {
+            albedo: Vec3f::new(0.8, 0.3, 0.3),
+        }),
     };
     let ground = Sphere {
         center: Vec3f::new(0., -100.5, -1.),
         radius: 100.,
+        material: Arc::new(Metal {
+            albedo: Vec3f::new(0.2, 0.3, 0.8),
+            fuzz: 0.5,
+        }),
     };
-
     let world = World {
         objects: vec![sphere, ground],
     };
