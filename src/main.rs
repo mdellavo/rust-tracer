@@ -15,7 +15,7 @@ use threadpool::ThreadPool;
 const WIDTH: u32 = 1024;
 const HEIGHT: u32 = 512;
 
-const NUM_SAMPLES: u32 = 100;
+const NUM_SAMPLES: u32 = 250;
 const T_MAX: f64 = f64::MAX;
 
 type Vec3f = Vector3<f64>;
@@ -26,13 +26,61 @@ struct Camera {
     horizontal: Vec3f,
     vertical: Vec3f,
     origin: Vec3f,
+    u: Vec3f,
+    v: Vec3f,
+    w: Vec3f,
+    lense_radius: f64,
 }
 
 impl Camera {
-    fn get_ray(&self, u: f64, v: f64) -> Ray {
+    fn new(
+        look_from: Vec3f,
+        look_at: Vec3f,
+        up: Vec3f,
+        fov: f64,
+        aspect: f64,
+        aperture: f64,
+        focus_dist: f64,
+    ) -> Camera {
+        let (u, v, w);
+
+        let theta = fov * f64::consts::PI / 180.0;
+        let half_height = (theta / 2.0).tan();
+        let half_width = aspect * half_height;
+        let lense_radius = aperture / 2.0;
+
+        w = (look_from - look_at).normalize();
+        u = up.cross(&w).normalize();
+        v = w.cross(&u);
+
+        let origin = look_from;
+        let lower_left_corner = origin
+            - (half_width * u * focus_dist)
+            - (half_height * v * focus_dist)
+            - (w * focus_dist);
+        let horizontal = 2.0 * half_width * u * focus_dist;
+        let vertical = 2.0 * half_height * v * focus_dist;
+
+        return Camera {
+            origin: origin,
+            lower_left_corner: lower_left_corner,
+            vertical: vertical,
+            horizontal: horizontal,
+            u: u,
+            v: v,
+            w: w,
+            lense_radius: lense_radius,
+        };
+    }
+
+    fn get_ray(&self, s: f64, t: f64) -> Ray {
+        let rd = self.lense_radius * random_point_in_unit();
+        let offset = self.u * rd.x + self.v * rd.y;
         let ray = Ray {
-            a: self.origin,
-            b: self.lower_left_corner + (u * self.horizontal) + (v * self.vertical),
+            a: self.origin + offset,
+            b: self.lower_left_corner + (s * self.horizontal) + (t * self.vertical)
+                - self.origin
+                - offset,
         };
         return ray;
     }
@@ -107,6 +155,69 @@ impl Material for Metal {
     }
 }
 
+fn refract(v: &Vec3f, n: &Vec3f, ni_over_nt: f64) -> Option<Vec3f> {
+    let uv = v.normalize();
+    let dt = uv.dot(&n);
+    let discriminant = 1.0 - ni_over_nt * ni_over_nt * (1.0 - dt * dt);
+    if discriminant > 0.0 {
+        let refracted = ni_over_nt * (uv - n * dt) - n * discriminant.sqrt();
+        return Some(refracted);
+    }
+    return None;
+}
+
+fn schlick(cosine: f64, ref_idx: f64) -> f64 {
+    let mut r0 = (1.0 - ref_idx) / (1.0 + ref_idx);
+    r0 = r0 * r0;
+    return r0 + (1.0 - r0) * (1.0 - cosine).powi(5);
+}
+
+struct Dielectric {
+    ref_idx: f64,
+}
+
+impl Material for Dielectric {
+    fn scatter(&self, ray: &Ray, hit: &Hit) -> Option<(Vec3f, Ray)> {
+        let reflected = reflect(&ray.direction(), &hit.normal);
+        let attenuation = Vec3f::new(1.0, 1.0, 1.0);
+
+        let outward_normal;
+        let ni_over_nt;
+        let cosine: f64;
+        let reflect_prob: f64;
+        if ray.direction().dot(&hit.normal) > 0.0 {
+            outward_normal = -hit.normal.clone();
+            ni_over_nt = self.ref_idx;
+            cosine = self.ref_idx * ray.direction().dot(&hit.normal) / ray.direction().magnitude();
+        } else {
+            outward_normal = hit.normal.clone();
+            ni_over_nt = 1.0 / self.ref_idx;
+            cosine = -ray.direction().dot(&hit.normal) / ray.direction().magnitude();
+        }
+
+        let result = refract(&ray.direction(), &outward_normal, ni_over_nt);
+        if result.is_some() {
+            reflect_prob = schlick(cosine, self.ref_idx);
+        } else {
+            reflect_prob = 1.0;
+        }
+
+        let scattered;
+        if rand::random::<f64>() < reflect_prob {
+            scattered = Ray {
+                a: hit.p,
+                b: reflected,
+            };
+        } else {
+            scattered = Ray {
+                a: hit.p,
+                b: result.unwrap(),
+            };
+        }
+        return Some((attenuation, scattered));
+    }
+}
+
 #[derive(Clone)]
 struct Sphere {
     center: Vec3f,
@@ -158,7 +269,7 @@ fn random_point_in_unit() -> Vec3f {
 }
 
 fn color(ray: &Ray, world: &impl Hittable, depth: u32) -> Vec3f {
-    let result = world.hit(ray, 0.001, T_MAX);
+    let result = world.hit(ray, 0.000001, T_MAX);
     match result {
         None => {
             return color_sky(ray);
@@ -218,46 +329,79 @@ impl<T: Hittable> Hittable for World<T> {
     }
 }
 
-fn main() {
-    let mut img: RgbaImage = ImageBuffer::new(WIDTH, HEIGHT);
+fn random_scenen() -> World<Sphere> {
+    let mut objects = Vec::new();
 
-    let camera = Camera {
-        lower_left_corner: Vec3f::new(-2.0, -1.0, -1.0),
-        horizontal: Vec3f::new(4.0, 0.0, 0.0),
-        vertical: Vec3f::new(0.0, 2.0, 0.0),
-        origin: Vec3f::new(0.0, 0.0, 0.0),
-    };
-
-    let sphere = Sphere {
-        center: Vec3f::new(0., 0., -1.),
-        radius: 0.5,
-        material: Arc::new(Diffuse {
-            albedo: Vec3f::new(0.8, 0.3, 0.3),
-        }),
-    };
     let ground = Sphere {
-        center: Vec3f::new(0., -100.5, -1.),
-        radius: 100.,
-        material: Arc::new(Metal {
-            albedo: Vec3f::new(0.2, 0.3, 0.8),
-            fuzz: 0.5,
+        center: Vec3f::new(0., -1000., 0.),
+        radius: 1000.,
+        material: Arc::new(Diffuse {
+            albedo: Vec3f::new(0.5, 0.5, 0.5),
         }),
     };
-    let world = World {
-        objects: vec![sphere, ground],
-    };
+    objects.push(ground);
 
+    for a in -11..11 {
+        for b in -11..11 {
+            let center = Vec3f::new(
+                2.0 * a as f64 * rand::random::<f64>(),
+                0.2,
+                2.0 * b as f64 * rand::random::<f64>(),
+            );
+            let sphere;
+
+            match rand::random::<f64>() {
+                0.0..=0.4 => {
+                    sphere = Sphere {
+                        center: center,
+                        radius: 0.2,
+                        material: Arc::new(Diffuse {
+                            albedo: Vec3f::new_random(),
+                        }),
+                    };
+                }
+                0.4..=0.8 => {
+                    sphere = Sphere {
+                        center: center,
+                        radius: 0.2,
+                        material: Arc::new(Metal {
+                            albedo: Vec3f::new_random(),
+                            fuzz: rand::random::<f64>(),
+                        }),
+                    };
+                }
+                _ => {
+                    sphere = Sphere {
+                        center: center,
+                        radius: 0.2,
+                        material: Arc::new(Dielectric {
+                            ref_idx: rand::random::<f64>(),
+                        }),
+                    };
+                }
+            }
+
+            objects.push(sphere);
+        }
+    }
+
+    return World { objects: objects };
+}
+
+fn render_parallel(img: &mut RgbaImage, world: &World<Sphere>, camera: &Camera) {
     let (tx, rx) = channel();
     let pool = ThreadPool::new(8);
     for x in 0..WIDTH {
-        for y in 0..HEIGHT {
-            let tx = tx.clone();
-            let w = world.clone();
-            pool.execute(move || {
-                tx.send((x, HEIGHT - y - 1, sample(&camera, x, y, &w)))
+        let tx = tx.clone();
+        let w = world.clone();
+        let c = camera.clone();
+        pool.execute(move || {
+            for y in 0..HEIGHT {
+                tx.send((x, HEIGHT - y - 1, sample(&c, x, y, &w)))
                     .expect("could not dispatch");
-            });
-        }
+            }
+            println!("{} done!", x);
+        });
     }
 
     pool.join();
@@ -271,6 +415,22 @@ fn main() {
             255,
         ]);
     }
+}
 
-    img.save("out.png").unwrap();
+fn main() {
+    let mut img: RgbaImage = ImageBuffer::new(WIDTH, HEIGHT);
+
+    let look_from = Vec3f::new(1.0, 1.0, 1.0);
+    let look_at = Vec3f::new(0.0, 0.0, 0.0);
+    let up = Vec3f::new(0.0, 1.0, 0.0);
+    let fov = 90.0;
+    let aspect = WIDTH as f64 / HEIGHT as f64;
+    let aperture = 0.0;
+    let dist_to_focus = (look_from - look_at).magnitude();
+    let camera = Camera::new(look_from, look_at, up, fov, aspect, aperture, dist_to_focus);
+
+    let world = random_scenen();
+    render_parallel(&mut img, &world, &camera);
+
+    img.save("out.bmp").unwrap();
 }
