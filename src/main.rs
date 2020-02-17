@@ -15,12 +15,14 @@ mod camera;
 mod material;
 mod ray;
 mod geometry;
+mod texture;
 
 use utils::Vec3f;
 use camera::Camera;
 use material::{Hit, Material, Dielectric, Diffuse, Metal};
 use ray::Ray;
 use geometry::{Hittable, Sphere};
+use texture::{ConstantTexture, CheckerTexture};
 
 const WIDTH: u32 = 1024;
 const HEIGHT: u32 = 512;
@@ -98,13 +100,16 @@ fn random_scenen() -> World<Sphere> {
         center: Vec3f::new(0., -1000., 0.),
         radius: 1000.,
         material: Arc::new(Diffuse {
-            albedo: Vec3f::new(0.5, 0.5, 0.5),
+            albedo: Arc::new(CheckerTexture {
+                odd:  Arc::new(ConstantTexture { color: Vec3f::new(0.0, 0.0, 0.0) }),
+                even:  Arc::new(ConstantTexture { color: Vec3f::new(1.0, 1.0, 1.0)}),
+            }),
         }),
     };
     objects.push(ground);
 
-    for a in -11..11 {
-        for b in -11..11 {
+    for a in -25..25 {
+        for b in -25..25 {
             let center = Vec3f::new(
                 a as f64,//2.0 * a as f64 * rand::random::<f64>(),
                 0.2,
@@ -118,7 +123,9 @@ fn random_scenen() -> World<Sphere> {
                         center: center,
                         radius: 0.2,
                         material: Arc::new(Diffuse {
-                            albedo: Vec3f::new_random(),
+                            albedo: Arc::new(ConstantTexture {
+                                color: Vec3f::new_random(),
+                            }),
                         }),
                     };
                 }
@@ -187,7 +194,7 @@ fn main() {
     let up = Vec3f::new(0.0, 1.0, 0.0);
     let fov = 90.0;
     let aspect = WIDTH as f64 / HEIGHT as f64;
-    let aperture = 0.1;
+    let aperture = 0.01;
     let dist_to_focus = (look_from - look_at).magnitude();
     let camera = Camera::new(look_from, look_at, up, fov, aspect, aperture, dist_to_focus);
 

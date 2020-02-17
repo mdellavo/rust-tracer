@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use crate::utils::{Vec3f, random_point_in_unit};
 use crate::ray::Ray;
+use crate::texture::Texture;
 
 
 pub struct Hit {
@@ -17,9 +18,8 @@ pub trait Material: Sync + Send {
     fn scatter(&self, ray: &Ray, hit: &Hit) -> Option<(Vec3f, Ray)>;
 }
 
-#[derive(Copy, Clone)]
 pub struct Diffuse {
-    pub albedo: Vec3f,
+    pub albedo: Arc<dyn Texture>,
 }
 
 impl Material for Diffuse {
@@ -29,7 +29,8 @@ impl Material for Diffuse {
             a: hit.p,
             b: target - hit.p,
         };
-        return Some((self.albedo.clone(), scattered));
+        let attenuation = self.albedo.value(0.0, 0.0, &hit);
+        return Some((*attenuation, scattered));
     }
 }
 
