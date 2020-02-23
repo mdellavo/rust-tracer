@@ -11,11 +11,16 @@ pub struct Hit {
     pub p: Vec3f,
     pub normal: Vec3f,
     pub material: Arc<dyn Material>,
+    pub u: f64,
+    pub v: f64,
 }
 
 
 pub trait Material: Sync + Send {
     fn scatter(&self, ray: &Ray, hit: &Hit) -> Option<(Vec3f, Ray)>;
+    fn emitted(&self, u: f64, v: f64, hit: &Hit) -> Vec3f {
+        return Vec3f::new(0.0, 0.0, 0.0);
+    }
 }
 
 pub struct Diffuse {
@@ -29,8 +34,8 @@ impl Material for Diffuse {
             a: hit.p,
             b: target - hit.p,
         };
-        let attenuation = self.albedo.value(0.0, 0.0, &hit);
-        return Some((*attenuation, scattered));
+        let attenuation = self.albedo.value(hit.u, hit.v, &hit);
+        return Some((attenuation, scattered));
     }
 }
 
@@ -120,4 +125,19 @@ impl Material for Dielectric {
         }
         return Some((attenuation, scattered));
     }
+}
+
+pub struct DiffuseLight {
+    pub texture: Arc<dyn Texture>,
+}
+
+impl Material for DiffuseLight {
+    fn scatter(&self, ray: &Ray, hit: &Hit) -> Option<(Vec3f, Ray)> {
+        return None;
+    }
+
+    fn emitted(&self, u: f64, v: f64, hit: &Hit) -> Vec3f {
+        return self.texture.value(u, v, hit);
+    }
+
 }

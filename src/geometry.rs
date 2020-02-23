@@ -18,6 +18,15 @@ pub struct Sphere {
     pub material: Arc<dyn Material>,
 }
 
+fn get_sphere_uv(p: Vec3f) -> (f64, f64) {
+    let phi = p.z.atan2(p.x);
+    let theta = p.y.asin();
+    let u = 1.0 - (phi + f64::consts::PI) / (2.0 * f64::consts::PI);
+    let v = (theta + f64::consts::PI/2.0) / f64::consts::PI;
+    return (u, v);
+}
+
+
 impl Hittable for Sphere {
     fn hit(&self, ray: &Ray, t_min: f64, t_max: f64) -> Option<Hit> {
         let oc = ray.origin() - self.center;
@@ -32,11 +41,14 @@ impl Hittable for Sphere {
         let _check = move |t: f64| -> Option<Hit> {
             if t > t_min && t < t_max {
                 let p = ray.point_at(t);
+                let (u, v) = get_sphere_uv((p - self.center) / self.radius);
                 return Some(Hit {
                     t: t,
                     p: p,
                     normal: ((p - self.center) / self.radius).normalize(),
                     material: self.material.clone(),
+                    u: u,
+                    v: v,
                 });
             }
             return None;
